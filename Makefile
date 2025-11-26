@@ -339,7 +339,7 @@ daemon-dev: daemon-dev-build
 	echo "$(TIMESTAMP) starting dev daemon in $$(pwd)" > ~/.humanlayer/logs/daemon-dev-$(TIMESTAMP).log
 	cd hld && HUMANLAYER_DATABASE_PATH=~/.humanlayer/daemon-dev.db \
 		HUMANLAYER_DAEMON_SOCKET=~/.humanlayer/daemon-dev.sock \
-		HUMANLAYER_DAEMON_HTTP_PORT=0 \
+		HUMANLAYER_DAEMON_HTTP_PORT=$(HUMANLAYER_DAEMON_HTTP_PORT) \
 		HUMANLAYER_DAEMON_VERSION_OVERRIDE=$$(git branch --show-current) \
 		./run-with-logging.sh ~/.humanlayer/logs/daemon-dev-$(TIMESTAMP).log ./hld-dev
 
