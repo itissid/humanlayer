@@ -41,6 +41,31 @@ Built on Claude Code. Open source. Scale from your laptop to your entire team.
 
 - **M U L T I C L A U D E** - Run Claude Code sessions in parallel. Worktrees? Done. Remote cloud workers? You got it.
 
+### Global Worktree Script Setup
+
+To use the worktree creation script from any project:
+
+1. **Create the symlink** (one-time setup):
+   ```bash
+   ln -s /path/to/humanlayer/hack/create_worktree.sh ~/bin/create-worktree
+   # Or wherever your PATH includes
+   ```
+
+2. **Create base directory** for each repo you want to use worktrees with:
+   ```bash
+   mkdir -p ~/workspace/wt/your-repo-name
+   ```
+
+3. **Initialize thoughts directory** (if using thoughts system):
+   Ensure `~/thoughts/repos/your-repo-name/` exists before running the script.
+
+4. **Get slash commands in your project**:
+   ```bash
+   cd ~/workspace/your-project
+   humanlayer claude init --all
+   ```
+   This copies `/create_worktree` and other useful commands to your project.
+
 ---
 
 > "This has improved my productivity (and token consumption) by at least 50%. Taking a superhuman style approach just makes soo much sense. Also, its so freaking cool to look back at all the work you've done in a day."
