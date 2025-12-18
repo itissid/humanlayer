@@ -32,6 +32,7 @@ type Manager struct {
 	pendingQueries     sync.Map // map[sessionID]query - stores queries waiting for Claude session ID
 	socketPath         string   // Daemon socket path for MCP servers
 	httpPort           int      // HTTP server port for proxy endpoint
+	config             *hldconfig.Config // Full daemon config for default MCP servers
 }
 
 // Compile-time check that Manager implements SessionManager
@@ -76,6 +77,16 @@ func NewManagerWithConfig(eventBus bus.EventBus, store store.ConversationStore, 
 		store:           store,
 		socketPath:      socketPath,
 		claudePath:      cfg.ClaudePath, // Use configured Claude path
+		config:          cfg,            // Store full config for default MCP servers
+	}
+
+	// Log default MCP servers if configured
+	if len(cfg.DefaultMCPServers) > 0 {
+		serverNames := make([]string, 0, len(cfg.DefaultMCPServers))
+		for name := range cfg.DefaultMCPServers {
+			serverNames = append(serverNames, name)
+		}
+		logger.Info("loaded default MCP servers from config", "servers", serverNames)
 	}
 
 	// Try to initialize Claude client but don't fail if unavailable
@@ -211,6 +222,28 @@ func (m *Manager) LaunchSession(ctx context.Context, config LaunchSessionConfig,
 	slog.Debug("injected codelayer MCP server",
 		"session_id", sessionID,
 		"socket_path", m.socketPath)
+
+	// Inject default MCP servers from daemon config (after codelayer, before user-provided)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer or user-provided servers
+			if _, exists := claudeConfig.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				claudeConfig.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID)
+			}
+		}
+	}
 
 	// Add HUMANLAYER_RUN_ID and HUMANLAYER_DAEMON_SOCKET to MCP server environment
 	// For HTTP servers, inject session ID header
@@ -1695,6 +1728,29 @@ func (m *Manager) ContinueSession(ctx context.Context, req ContinueSessionConfig
 		"parent_session_id", req.ParentSessionID,
 		"socket_path", m.socketPath)
 
+	// Inject default MCP servers from daemon config (if not already present from parent or user override)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer, inherited servers, or user-provided servers
+			if _, exists := config.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				config.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config for continued session",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID,
+					"parent_session_id", req.ParentSessionID)
+			}
+		}
+	}
+
 	if config.MCPConfig != nil {
 		for name, server := range config.MCPConfig.MCPServers {
 			// Skip codelayer as we already configured it above
@@ -1946,6 +2002,28 @@ func (m *Manager) launchDraftWithConfig(ctx context.Context, sessionID, runID st
 			"HUMANLAYER_SESSION_ID":    sessionID,
 			"HUMANLAYER_DAEMON_SOCKET": m.socketPath,
 		},
+	}
+
+	// Inject default MCP servers from daemon config (after codelayer, before user-provided)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer or user-provided servers
+			if _, exists := claudeConfig.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				claudeConfig.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config for draft session",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID)
+			}
+		}
 	}
 
 	// Add HUMANLAYER_RUN_ID and HUMANLAYER_DAEMON_SOCKET to MCP server environment
