@@ -2,6 +2,20 @@
 setup: ## Set up the repository with all dependencies and builds
 	hack/setup_repo.sh
 
+.PHONY: setup-wui
+setup-wui: ## Minimal setup for WUI frontend development only (no daemon/hlyr/Go builds)
+	@echo "📦 Installing HLD SDK dependencies..."
+	bun install --cwd=hld/sdk/typescript
+	@echo "🏗️  Building HLD TypeScript SDK..."
+	cd hld/sdk/typescript && bun run build
+	@echo "📦 Installing WUI dependencies..."
+	bun install --cwd=humanlayer-wui
+	@echo "🔧 Creating placeholder binaries for Tauri..."
+	mkdir -p humanlayer-wui/src-tauri/bin
+	touch humanlayer-wui/src-tauri/bin/hld
+	touch humanlayer-wui/src-tauri/bin/humanlayer
+	@echo "✅ WUI frontend setup complete"
+
 # CI-specific targets
 .PHONY: setup-ci ci-tools
 
@@ -364,6 +378,37 @@ ifdef POSTHOG
 else
 	cd humanlayer-wui && HUMANLAYER_DAEMON_SOCKET=~/.humanlayer/daemon-dev.sock bun run tauri dev
 endif
+
+# Run dev WUI against a remote daemon over SSH tunnel
+.PHONY: wui-dev-remote
+wui-dev-remote: ## Run WUI dev server against remote daemon (SSH tunnel). Use REMOTE_HOST, REMOTE_PORT, LOCAL_PORT to override defaults.
+	$(eval REMOTE_HOST := $(or $(REMOTE_HOST),truenas-dev-2))
+	$(eval REMOTE_PORT := $(or $(REMOTE_PORT),43237))
+	$(eval LOCAL_PORT := $(or $(LOCAL_PORT),7777))
+	@if lsof -Pi :$(LOCAL_PORT) -sTCP:LISTEN -t >/dev/null 2>&1; then \
+		echo "SSH tunnel already running on port $(LOCAL_PORT)"; \
+	else \
+		echo "Starting SSH tunnel: $(LOCAL_PORT) -> $(REMOTE_HOST):$(REMOTE_PORT)"; \
+		ssh -f -N -L $(LOCAL_PORT):localhost:$(REMOTE_PORT) $(REMOTE_HOST); \
+		sleep 1; \
+		if lsof -Pi :$(LOCAL_PORT) -sTCP:LISTEN -t >/dev/null 2>&1; then \
+			echo "SSH tunnel established"; \
+		else \
+			echo "ERROR: Failed to establish SSH tunnel"; \
+			exit 1; \
+		fi; \
+	fi
+	@if curl -s -o /dev/null -w "%{http_code}" http://localhost:$(LOCAL_PORT)/api/v1/health | grep -q "200"; then \
+		echo "Daemon reachable on port $(LOCAL_PORT)"; \
+	else \
+		echo "WARNING: Tunnel exists but daemon may not be running on remote"; \
+	fi
+	@echo "Starting WUI dev server against remote daemon on port $(LOCAL_PORT)..."
+	cd humanlayer-wui && \
+		HUMANLAYER_WUI_AUTOLAUNCH_DAEMON=false \
+		HUMANLAYER_DAEMON_HTTP_PORT=$(LOCAL_PORT) \
+		RUST_LOG=debug \
+		bun run tauri dev
 
 # Run Storybook for WUI component development
 .PHONY: storybook
