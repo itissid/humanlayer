@@ -792,6 +792,7 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
       scopes: [detailScope],
       enabled: !expandedToolResult && !forkViewOpen,
       preventDefault: true,
+      useKey: true,
     },
     [openConversationSearch, expandedToolResult, forkViewOpen],
   )
