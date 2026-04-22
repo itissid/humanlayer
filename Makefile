@@ -365,6 +365,75 @@ daemon-dev: daemon-dev-build
 		HUMANLAYER_DAEMON_VERSION_OVERRIDE=$$(git branch --show-current) \
 		./run-with-logging.sh ~/.humanlayer/logs/daemon-dev-$(TIMESTAMP).log ./hld-dev
 
+# Detect the single local daemon process and report its PID and port
+.PHONY: daemon-detect
+daemon-detect: ## Detect a single running local hld daemon. Reports PID and PORT, exits 1 if 0 or >1.
+	@PIDS=""; \
+	for pid in $$(pgrep -x hld 2>/dev/null) $$(pgrep -x hld-dev 2>/dev/null); do \
+		PIDS="$$PIDS $$pid"; \
+	done; \
+	PIDS=$$(echo $$PIDS | xargs); \
+	COUNT=$$(echo $$PIDS | wc -w | xargs); \
+	if [ "$$COUNT" -eq 0 ]; then \
+		echo "ERROR: No local hld daemon found"; \
+		exit 1; \
+	elif [ "$$COUNT" -gt 1 ]; then \
+		echo "ERROR: Multiple local hld daemons found ($$COUNT): $$PIDS"; \
+		exit 1; \
+	fi; \
+	PID=$$PIDS; \
+	PORT=$$(lsof -a -p $$PID -iTCP -sTCP:LISTEN -n -P 2>/dev/null | grep "^hld" | awk '{print $$9}' | sed 's/.*://'); \
+	if [ -z "$$PORT" ]; then \
+		echo "ERROR: Could not determine port for hld PID $$PID"; \
+		exit 1; \
+	fi; \
+	echo "PID=$$PID"; \
+	echo "PORT=$$PORT"
+
+# Kill a local daemon process by PID (sends SIGTERM, then SIGKILL if still alive)
+.PHONY: daemon-kill
+daemon-kill: ## Kill a daemon by PID. Usage: make daemon-kill PID=<pid>
+	@if [ -z "$(PID)" ]; then \
+		echo "ERROR: PID parameter required"; \
+		echo "Usage: make daemon-kill PID=12345"; \
+		exit 1; \
+	fi; \
+	PROC_NAME=$$(ps -p $(PID) -o comm= 2>/dev/null); \
+	if [ -z "$$PROC_NAME" ]; then \
+		echo "ERROR: No process found with PID $(PID)"; \
+		exit 1; \
+	fi; \
+	case "$$PROC_NAME" in \
+		*hld*) ;; \
+		*) echo "ERROR: PID $(PID) is not an hld process (found: $$PROC_NAME)"; exit 1 ;; \
+	esac; \
+	echo "Sending SIGTERM to $$PROC_NAME (PID $(PID))..."; \
+	kill -TERM $(PID) 2>/dev/null; \
+	sleep 3; \
+	if ps -p $(PID) > /dev/null 2>&1; then \
+		echo "Process still alive, sending SIGKILL..."; \
+		kill -KILL $(PID) 2>/dev/null; \
+	else \
+		echo "Daemon (PID $(PID)) terminated gracefully"; \
+	fi
+
+# Run dev daemon with nightly database (for use with wui-dev-local)
+.PHONY: daemon-dev-local
+daemon-dev-local: daemon-dev-build ## Run dev daemon with nightly DB on port 7779 (pairs with wui-dev-local). Use LOCAL_PORT to override.
+	$(eval LOCAL_PORT := $(or $(LOCAL_PORT),7779))
+	@mkdir -p ~/.humanlayer/logs
+	$(eval TIMESTAMP := $(shell date +%Y-%m-%d-%H-%M-%S))
+	@echo "Starting dev daemon with nightly database on port $(LOCAL_PORT)"
+	@echo "  Database: ~/.humanlayer/daemon-nightly.db"
+	@echo "  Socket: ~/.humanlayer/daemon-local-wui.sock"
+	@echo "  Port: $(LOCAL_PORT)"
+	echo "$(TIMESTAMP) starting daemon-dev-local in $$(pwd)" > ~/.humanlayer/logs/daemon-dev-local-$(TIMESTAMP).log
+	cd hld && HUMANLAYER_DATABASE_PATH=~/.humanlayer/daemon-nightly.db \
+		HUMANLAYER_DAEMON_SOCKET=~/.humanlayer/daemon-local-wui.sock \
+		HUMANLAYER_DAEMON_HTTP_PORT=$(LOCAL_PORT) \
+		HUMANLAYER_DAEMON_VERSION_OVERRIDE=$$(git branch --show-current) \
+		./run-with-logging.sh ~/.humanlayer/logs/daemon-dev-local-$(TIMESTAMP).log ./hld-dev
+
 # Run dev WUI with custom socket
 .PHONY: wui-dev
 wui-dev: ## Run CodeLayer (WUI) in development mode. Use POSTHOG=true to enable analytics debugging.
@@ -408,6 +477,73 @@ wui-dev-remote: ## Run WUI dev server against remote daemon (SSH tunnel). Use RE
 		HUMANLAYER_WUI_AUTOLAUNCH_DAEMON=false \
 		HUMANLAYER_DAEMON_HTTP_PORT=$(LOCAL_PORT) \
 		RUST_LOG=debug \
+		bun run tauri dev
+
+# Run dev WUI against a local daemon (detects running hld process or starts one)
+.PHONY: wui-dev-local
+wui-dev-local: ## Run WUI dev server against local daemon (auto-detects running hld process). Use LOCAL_PORT to override.
+	@DAEMON_PORT="$(LOCAL_PORT)"; \
+	if [ -z "$$DAEMON_PORT" ]; then \
+		HLD_PID=$$(pgrep -x hld 2>/dev/null | head -1); \
+		if [ -n "$$HLD_PID" ]; then \
+			DAEMON_PORT=$$(lsof -a -p $$HLD_PID -iTCP -sTCP:LISTEN -n -P 2>/dev/null | grep "^hld" | awk '{print $$9}' | sed 's/.*://'); \
+			if [ -n "$$DAEMON_PORT" ]; then \
+				echo "Found local hld process (PID $$HLD_PID) on port $$DAEMON_PORT"; \
+			fi; \
+		fi; \
+		if [ -z "$$DAEMON_PORT" ]; then \
+			HLD_PID=$$(pgrep hld-dev 2>/dev/null | head -1); \
+			if [ -n "$$HLD_PID" ]; then \
+				DAEMON_PORT=$$(lsof -a -p $$HLD_PID -iTCP -sTCP:LISTEN -n -P 2>/dev/null | grep "^hld" | awk '{print $$9}' | sed 's/.*://'); \
+				if [ -n "$$DAEMON_PORT" ]; then \
+					echo "Found local hld-dev process (PID $$HLD_PID) on port $$DAEMON_PORT"; \
+				fi; \
+			fi; \
+		fi; \
+	fi; \
+	if [ -n "$$DAEMON_PORT" ]; then \
+		echo "Using daemon on port $$DAEMON_PORT"; \
+	else \
+		DAEMON_PORT=7779; \
+		echo "No running hld process found, starting one on port $$DAEMON_PORT..."; \
+		if [ -f hld/hld-dev ]; then \
+			DAEMON_BIN=hld/hld-dev; \
+		elif [ -f /Applications/CodeLayer-Nightly.app/Contents/Resources/bin/hld ]; then \
+			DAEMON_BIN=/Applications/CodeLayer-Nightly.app/Contents/Resources/bin/hld; \
+		else \
+			echo "ERROR: No daemon binary found."; \
+			echo "  Run 'make daemon-dev-build' to build one, or install CodeLayer Nightly."; \
+			exit 1; \
+		fi; \
+		mkdir -p ~/.humanlayer/logs; \
+		echo "Starting daemon from: $$DAEMON_BIN"; \
+		HUMANLAYER_DAEMON_HTTP_PORT=$$DAEMON_PORT \
+		HUMANLAYER_DATABASE_PATH=~/.humanlayer/daemon-nightly.db \
+		HUMANLAYER_DAEMON_SOCKET=~/.humanlayer/daemon-local-wui.sock \
+		$$DAEMON_BIN > ~/.humanlayer/logs/daemon-local-wui.log 2>&1 & \
+		echo "Daemon starting (PID: $$!)..."; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			if lsof -Pi :$$DAEMON_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then \
+				echo "Daemon listening on port $$DAEMON_PORT"; \
+				break; \
+			fi; \
+			if [ $$i -eq 10 ]; then \
+				echo "ERROR: Daemon didn't start. Check ~/.humanlayer/logs/daemon-local-wui.log"; \
+				exit 1; \
+			fi; \
+			sleep 1; \
+		done; \
+	fi; \
+	if curl -s -o /dev/null -w "%{http_code}" http://localhost:$$DAEMON_PORT/api/v1/health | grep -q "200"; then \
+		echo "Daemon health check: OK"; \
+	else \
+		echo "WARNING: Daemon health check failed, may still be initializing..."; \
+	fi; \
+	echo "Starting WUI dev server against local daemon on port $$DAEMON_PORT..."; \
+	cd humanlayer-wui && \
+		HUMANLAYER_WUI_AUTOLAUNCH_DAEMON=false \
+		HUMANLAYER_DAEMON_HTTP_PORT=$$DAEMON_PORT \
+		VITE_HUMANLAYER_DAEMON_URL=http://localhost:$$DAEMON_PORT \
 		bun run tauri dev
 
 # Run Storybook for WUI component development
