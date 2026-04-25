@@ -1,0 +1,5 @@
+# Force-include gitignored directories for @ search
+# These are symlinks — EvalSymlinks resolves them before walking
+thoughts/shared
+thoughts/itissid
+thoughts/global
