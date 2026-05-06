@@ -1,0 +1,260 @@
+# Project-local Codex exec policy for HumanLayer.
+#
+# These rules are a second line of defense for host/outside-sandbox execution.
+# The main boundary is `.codex/config.toml`: workspace-write, no shell network.
+
+# Allow local Git workflows that are normally useful during coding.
+prefix_rule(
+    pattern = ["git", [
+        "add",
+        "am",
+        "bisect",
+        "branch",
+        "cherry-pick",
+        "checkout",
+        "commit",
+        "diff",
+        "grep",
+        "log",
+        "merge",
+        "merge-base",
+        "rebase",
+        "reflog",
+        "restore",
+        "rev-parse",
+        "show",
+        "stash",
+        "status",
+        "switch",
+        "tag",
+        "worktree",
+    ]],
+    decision = "allow",
+    justification = "Local Git inspection and history-editing commands are allowed for normal coding work.",
+    match = [
+        "git status --short",
+        "git commit -m update",
+        "git rebase main",
+        "git merge feature/foo",
+        "git branch scratch",
+    ],
+    not_match = [
+        "git push origin main",
+        "git fetch origin",
+        "git remote -v",
+    ],
+)
+
+# Disallow Git commands that contact remotes or can disclose repository data.
+prefix_rule(
+    pattern = ["git", [
+        "archive",
+        "bundle",
+        "fetch",
+        "ls-remote",
+        "pull",
+        "push",
+        "remote",
+        "request-pull",
+        "send-email",
+        "submodule",
+    ]],
+    decision = "forbidden",
+    justification = "Remote Git and export commands can send or package repository data; run them manually when needed.",
+    match = [
+        "git push origin main",
+        "git fetch origin",
+        "git pull --rebase",
+        "git remote -v",
+        "git archive HEAD",
+    ],
+)
+
+# Block destructive filesystem commands.
+prefix_rule(
+    pattern = [[
+        "rm",
+        "rmdir",
+        "shred",
+        "unlink",
+        "truncate",
+    ]],
+    decision = "forbidden",
+    justification = "Use apply_patch or Git-aware edits instead of direct destructive deletion commands.",
+    match = [
+        "rm -rf build",
+        "rmdir tmp",
+        "shred secrets.txt",
+        "truncate -s 0 file.txt",
+    ],
+)
+
+# Block direct privilege, ownership, and permission changes.
+prefix_rule(
+    pattern = [[
+        "sudo",
+        "su",
+        "doas",
+        "chmod",
+        "chown",
+        "chgrp",
+        "setfacl",
+        "mount",
+        "umount",
+    ]],
+    decision = "forbidden",
+    justification = "Privilege and permission changes should stay under explicit human control.",
+    match = [
+        "sudo make install",
+        "chmod 777 script.sh",
+        "chown root file",
+    ],
+)
+
+# Block arbitrary network and file transfer clients.
+prefix_rule(
+    pattern = [[
+        "curl",
+        "wget",
+        "aria2c",
+        "nc",
+        "netcat",
+        "ncat",
+        "socat",
+        "telnet",
+        "ftp",
+        "sftp",
+        "ssh",
+        "scp",
+        "rsync",
+    ]],
+    decision = "forbidden",
+    justification = "Network clients can exfiltrate repo data or open remote shells; use Codex web search or approved MCP tools instead.",
+    match = [
+        "curl https://example.com",
+        "ssh example.com",
+        "scp file user@example.com:/tmp/file",
+        "rsync -av . host:/tmp/repo",
+    ],
+)
+
+# Block arbitrary interpreter entry points for outside-sandbox execution.
+prefix_rule(
+    pattern = [[
+        "python",
+        "python2",
+        "python3",
+        "py",
+        "pypy",
+        "pypy3",
+        "ruby",
+        "perl",
+        "php",
+        "lua",
+        "node",
+        "deno",
+    ]],
+    decision = "forbidden",
+    justification = "General-purpose interpreters can run arbitrary filesystem and network code outside the sandbox.",
+    match = [
+        "python3 -c 'print(1)'",
+        "node -e 'console.log(process.env)'",
+        "ruby -e 'puts 1'",
+    ],
+)
+
+# Block broad package-manager install/publish paths that often use the network.
+prefix_rule(
+    pattern = [["npm", "pnpm", "yarn", "bun"], [
+        "add",
+        "audit",
+        "dlx",
+        "exec",
+        "install",
+        "i",
+        "link",
+        "login",
+        "publish",
+        "upgrade",
+        "update",
+    ]],
+    decision = "forbidden",
+    justification = "Package-manager network and publish actions should be run manually or with a task-specific exception.",
+    match = [
+        "npm install",
+        "pnpm add react",
+        "yarn publish",
+        "bun install",
+    ],
+    not_match = [
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "bun test",
+    ],
+)
+
+# Block container and VM launchers that can escape the intended workspace boundary.
+prefix_rule(
+    pattern = [[
+        "docker",
+        "podman",
+        "kubectl",
+        "helm",
+        "terraform",
+        "ansible",
+        "vagrant",
+    ]],
+    decision = "forbidden",
+    justification = "Infrastructure and container commands can access external systems or mount arbitrary host paths.",
+    match = [
+        "docker run alpine",
+        "kubectl get pods",
+        "terraform apply",
+    ],
+)
+
+# Block shell wrappers for outside-sandbox execution so unsafe scripts cannot
+# hide behind redirection, substitutions, heredocs, or control flow.
+prefix_rule(
+    pattern = [["bash", "sh", "zsh"], ["-c", "-lc"]],
+    decision = "forbidden",
+    justification = "Run simple commands directly; shell scripts outside the sandbox are too broad for this policy.",
+    match = [
+        "bash -lc 'curl https://example.com'",
+        "zsh -lc 'python3 - <<PY'",
+        "sh -c 'rm -rf build'",
+    ],
+)
+
+# Block obvious environment and secret disclosure helpers outside the sandbox.
+prefix_rule(
+    pattern = [[
+        "env",
+        "printenv",
+        "base64",
+        "xxd",
+        "hexdump",
+        "gpg",
+        "openssl",
+    ]],
+    decision = "forbidden",
+    justification = "These commands are commonly used to expose or transform sensitive data for exfiltration.",
+    match = [
+        "printenv",
+        "base64 .env",
+        "openssl s_client -connect example.com:443",
+    ],
+)
+
+# Block GitHub CLI write/exfiltration paths by default.
+prefix_rule(
+    pattern = ["gh"],
+    decision = "forbidden",
+    justification = "The GitHub CLI can send repository data or mutate remote state; use it manually or add narrow read-only rules later.",
+    match = [
+        "gh api repos/owner/repo",
+        "gh pr comment 1 --body hi",
+        "gh gist create file.txt",
+    ],
+)
