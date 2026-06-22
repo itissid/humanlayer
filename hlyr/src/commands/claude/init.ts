@@ -19,6 +19,22 @@ interface InitOptions {
   model?: ModelType
 }
 
+function copyDirRecursive(srcDir: string, destDir: string): number {
+  let count = 0
+  fs.mkdirSync(destDir, { recursive: true })
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const srcPath = path.join(srcDir, entry.name)
+    const destPath = path.join(destDir, entry.name)
+    if (entry.isDirectory()) {
+      count += copyDirRecursive(srcPath, destPath)
+    } else if (entry.isFile()) {
+      fs.copyFileSync(srcPath, destPath)
+      count++
+    }
+  }
+  return count
+}
+
 function ensureGitignoreEntry(targetDir: string, entry: string): void {
   const gitignorePath = path.join(targetDir, '.gitignore')
 
@@ -109,7 +125,7 @@ export async function claudeInitCommand(options: InitOptions): Promise<void> {
     let selectedCategories: string[]
 
     if (options.all) {
-      selectedCategories = ['commands', 'agents', 'settings']
+      selectedCategories = ['commands', 'agents', 'skills', 'settings']
     } else {
       // Interactive selection
       const selection = await p.multiselect({
@@ -126,12 +142,17 @@ export async function claudeInitCommand(options: InitOptions): Promise<void> {
             hint: '6 specialized sub-agents for code analysis',
           },
           {
+            value: 'skills',
+            label: 'Skills',
+            hint: 'Project skills (humanlayer-sessions, etc.)',
+          },
+          {
             value: 'settings',
             label: 'Settings',
             hint: 'Project permissions configuration',
           },
         ],
-        initialValues: ['commands', 'agents', 'settings'],
+        initialValues: ['commands', 'agents', 'skills', 'settings'],
         required: false,
       })
 
@@ -211,6 +232,37 @@ export async function claudeInitCommand(options: InitOptions): Promise<void> {
 
           if (filesToCopyByCategory['agents'].length === 0) {
             filesSkipped += allFiles.length
+          }
+        }
+      }
+
+      // Skills selection (if selected) — each skill is a directory
+      if (selectedCategories.includes('skills')) {
+        const sourceDir = path.join(sourceClaudeDir, 'skills')
+        if (fs.existsSync(sourceDir)) {
+          const allSkills = fs
+            .readdirSync(sourceDir, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name)
+          const skillSelection = await p.multiselect({
+            message: 'Select skills to copy:',
+            options: allSkills.map(skill => ({
+              value: skill,
+              label: skill,
+            })),
+            initialValues: allSkills,
+            required: false,
+          })
+
+          if (p.isCancel(skillSelection)) {
+            p.cancel('Operation cancelled.')
+            process.exit(0)
+          }
+
+          filesToCopyByCategory['skills'] = skillSelection as string[]
+
+          if (filesToCopyByCategory['skills'].length === 0) {
+            filesSkipped += allSkills.length
           }
         }
       }
@@ -326,6 +378,40 @@ export async function claudeInitCommand(options: InitOptions): Promise<void> {
 
         filesSkipped += allFiles.length - filesToCopy.length
         p.log.success(`Copied ${filesToCopy.length} ${category} file(s)`)
+      } else if (category === 'skills') {
+        const sourceDir = path.join(sourceClaudeDir, 'skills')
+        const targetCategoryDir = path.join(claudeTargetDir, 'skills')
+
+        if (!fs.existsSync(sourceDir)) {
+          p.log.warn('skills directory not found in source, skipping')
+          continue
+        }
+
+        // Each entry under skills/ is a skill directory (may contain nested files)
+        const allSkills = fs
+          .readdirSync(sourceDir, { withFileTypes: true })
+          .filter(entry => entry.isDirectory())
+          .map(entry => entry.name)
+
+        let skillsToCopy = allSkills
+        if (!options.all && filesToCopyByCategory['skills']) {
+          skillsToCopy = filesToCopyByCategory['skills']
+        }
+
+        if (skillsToCopy.length === 0) {
+          continue
+        }
+
+        fs.mkdirSync(targetCategoryDir, { recursive: true })
+
+        for (const skill of skillsToCopy) {
+          const sourcePath = path.join(sourceDir, skill)
+          const targetPath = path.join(targetCategoryDir, skill)
+          filesCopied += copyDirRecursive(sourcePath, targetPath)
+        }
+
+        filesSkipped += allSkills.length - skillsToCopy.length
+        p.log.success(`Copied ${skillsToCopy.length} skill(s)`)
       } else if (category === 'settings') {
         const settingsPath = path.join(sourceClaudeDir, 'settings.json')
         const targetSettingsPath = path.join(claudeTargetDir, 'settings.json')

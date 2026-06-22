@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "tsup",
-    "prepack": "npm run build && rimraf .claude && mkdir -p .claude && cp -r ../.claude/commands ../.claude/agents ../.claude/settings.json .claude/",
+    "prepack": "npm run build && rimraf .claude && mkdir -p .claude && cp -r ../.claude/commands ../.claude/agents ../.claude/skills ../.claude/settings.json .claude/",
     "postpack": "rm -rf .claude",
     "build:watch": "tsup --watch",
     "dev": "npm run build && ./dist/index.js",

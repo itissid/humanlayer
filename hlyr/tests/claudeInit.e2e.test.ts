@@ -42,6 +42,7 @@ describe('claude init e2e tests', () => {
 
       const commandsDir = join(claudeDir, 'commands')
       const agentsDir = join(claudeDir, 'agents')
+      const skillsDir = join(claudeDir, 'skills')
       const settingsFile = join(claudeDir, 'settings.json')
 
       expect(
@@ -53,6 +54,25 @@ describe('claude init e2e tests', () => {
       expect(
         await fs
           .stat(agentsDir)
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(true)
+      expect(
+        await fs
+          .stat(skillsDir)
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(true)
+      // Skills are directories with nested files — verify recursive copy landed
+      expect(
+        await fs
+          .stat(join(skillsDir, 'humanlayer-sessions', 'SKILL.md'))
+          .then(() => true)
+          .catch(() => false),
+      ).toBe(true)
+      expect(
+        await fs
+          .stat(join(skillsDir, 'humanlayer-sessions', 'scripts', 'query.py'))
           .then(() => true)
           .catch(() => false),
       ).toBe(true)
