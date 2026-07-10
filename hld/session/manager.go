@@ -29,9 +29,9 @@ type Manager struct {
 	eventBus           bus.EventBus
 	store              store.ConversationStore
 	approvalReconciler ApprovalReconciler
-	pendingQueries     sync.Map // map[sessionID]query - stores queries waiting for Claude session ID
-	socketPath         string   // Daemon socket path for MCP servers
-	httpPort           int      // HTTP server port for proxy endpoint
+	pendingQueries     sync.Map          // map[sessionID]query - stores queries waiting for Claude session ID
+	socketPath         string            // Daemon socket path for MCP servers
+	httpPort           int               // HTTP server port for proxy endpoint
 	config             *hldconfig.Config // Full daemon config for default MCP servers
 }
 
@@ -1113,6 +1113,8 @@ func (m *Manager) processStreamEvent(ctx context.Context, sessionID string, clau
 					modelName = "sonnet"
 				} else if strings.Contains(lowerModel, "haiku") {
 					modelName = "haiku"
+				} else if strings.Contains(lowerModel, "fable") {
+					modelName = "fable"
 				}
 
 				// Update session with both model ID and simplified name

@@ -16,6 +16,7 @@ const (
 	ModelOpus   Model = "opus"
 	ModelSonnet Model = "sonnet"
 	ModelHaiku  Model = "haiku"
+	ModelFable  Model = "fable"
 )
 
 // OutputFormat specifies the output format for Claude CLI
