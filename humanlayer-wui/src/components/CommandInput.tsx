@@ -211,6 +211,7 @@ export default function CommandInput({
                   <SelectItem value="sonnet">Sonnet</SelectItem>
                   <SelectItem value="opus">Opus</SelectItem>
                   <SelectItem value="haiku">Haiku</SelectItem>
+                  <SelectItem value="fable">Fable</SelectItem>
                 </SelectContent>
               </Select>
             )}
@@ -230,6 +231,7 @@ export default function CommandInput({
             <SelectContent>
               <SelectItem value="sonnet">Sonnet</SelectItem>
               <SelectItem value="opus">Opus</SelectItem>
+              <SelectItem value="fable">Fable</SelectItem>
             </SelectContent>
           </Select>
         </div>

@@ -184,6 +184,8 @@ export class HTTPDaemonClient implements IDaemonClient {
         model = 'opus'
       } else if (params.model.includes('haiku')) {
         model = 'haiku'
+      } else if (params.model.includes('fable')) {
+        model = 'fable'
       }
     }
     // For OpenRouter and Baseten, pass model string as-is via proxyModelOverride
@@ -202,7 +204,7 @@ export class HTTPDaemonClient implements IDaemonClient {
       model:
         provider === 'openrouter' || provider === 'baseten'
           ? undefined
-          : (model as 'opus' | 'sonnet' | 'haiku' | undefined),
+          : (model as 'opus' | 'sonnet' | 'haiku' | 'fable' | undefined),
       mcpConfig: 'mcpConfig' in params ? params.mcpConfig : (params as LaunchSessionRequest).mcp_config,
       permissionPromptTool:
         'permissionPromptTool' in params
