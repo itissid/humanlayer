@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import chalk from 'chalk'
+import wrapAnsi from 'wrap-ansi'
 import { loadThoughtsConfig, expandPath } from '../../thoughtsConfig.js'
 
 export interface ThoughtEntry {
@@ -13,6 +14,8 @@ export interface ThoughtEntry {
   project: string
   /** Containing category folder (research, plans, tickets, …), or '' when uncategorized. */
   kind: string
+  /** Tags from the document's YAML frontmatter. Empty when absent or unreadable. */
+  tags: string[]
   /** Date parsed from the filename prefix, or '' when the filename carries no date. */
   fileDate: string
   /** Full sha of the most recent commit touching relPath. */
@@ -24,8 +27,16 @@ export interface ThoughtEntry {
 const NAME_WIDTH = 52
 const PROJECT_WIDTH = 16
 const KIND_WIDTH = 14
+const TAGS_WIDTH = 28
 const DATE_WIDTH = 10
 const DEFAULT_LIMIT = 20
+
+/**
+ * Frontmatter is a small header, so each document is read as a bounded prefix rather than in
+ * full. 8 KiB clears the largest frontmatter block in the corpus with room to spare; a document
+ * whose frontmatter somehow exceeds it reports no tags rather than risking a bad parse.
+ */
+const FRONTMATTER_READ_BYTES = 8192
 
 /** Timestamps are normalized to one zone so rows committed from different machines compare. */
 const DISPLAY_TIMEZONE = 'America/New_York'
@@ -158,6 +169,71 @@ export function parseGitLog(stdout: string): Map<string, { commit: string; date:
 }
 
 /**
+ * Extracts tags from a document's YAML frontmatter.
+ *
+ * Scoped strictly to the leading `---` fence, never searched document-wide. A bare `^tags:`
+ * match would pick up prose and code: one plan contains the TypeScript line
+ * `tags: {} as 'bot_conversation' | ...` inside a fenced code block, which is not metadata.
+ *
+ * Only the inline flow form (`tags: [a, b, c]`) occurs in the corpus; anything else — no
+ * frontmatter, no closing fence, no `tags:` key, or a form we do not recognize — yields no tags,
+ * leaving the document listed with an empty cell.
+ */
+export function parseTags(fileContents: string): string[] {
+  const lines = fileContents.split('\n').map(line => line.replace(/\r$/, ''))
+
+  if (lines[0]?.trim() !== '---') {
+    return []
+  }
+
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---')
+  if (closing === -1) {
+    return []
+  }
+
+  const tagLine = lines.slice(1, closing).find(line => /^tags:/.test(line))
+  const match = tagLine?.match(/^tags:\s*\[(.*)\]\s*$/)
+  if (!match) {
+    return []
+  }
+
+  return match[1]
+    .split(',')
+    .map(tag => tag.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+}
+
+/** Reads the head of a file, returning '' if it cannot be opened. */
+function readFileHead(filePath: string): string {
+  let fd: number | undefined
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const buffer = Buffer.alloc(FRONTMATTER_READ_BYTES)
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer.toString('utf8', 0, bytesRead)
+  } catch {
+    return ''
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd)
+    }
+  }
+}
+
+/**
+ * Populates tags for the entries about to be displayed.
+ *
+ * Called after the limit is applied, so a default run touches ~20 files rather than every
+ * document in the repo, keeping the git walk the dominant cost.
+ */
+export function attachTags(repo: string, entries: ThoughtEntry[]): ThoughtEntry[] {
+  return entries.map(entry => ({
+    ...entry,
+    tags: parseTags(readFileHead(path.join(repo, entry.relPath))),
+  }))
+}
+
+/**
  * Renders an ISO committer date as `Aug  8 2026 03:34 PM`, converted to Eastern Time.
  *
  * Every row is normalized to one zone: a commit made from a machine in another timezone would
@@ -217,6 +293,7 @@ export function buildEntries(
       name: basename.replace(/\.md$/i, ''),
       project,
       kind: parseKind(relPath, reposDir, globalDir),
+      tags: [],
       fileDate: parseFilenameDate(basename),
       commit,
       editedAt: date,
@@ -247,21 +324,36 @@ export function formatTable(entries: ThoughtEntry[]): string {
     'NAME'.padEnd(NAME_WIDTH),
     'PROJECT'.padEnd(PROJECT_WIDTH),
     'KIND'.padEnd(KIND_WIDTH),
+    'TAGS'.padEnd(TAGS_WIDTH),
     'DATE'.padEnd(DATE_WIDTH),
     'EDITED (ET)',
   ].join('  ')
 
-  const rows = entries.map(entry =>
-    [
+  // Continuation lines for wrapped tags line up under the TAGS column.
+  const tagsIndent = ' '.repeat(NAME_WIDTH + 2 + PROJECT_WIDTH + 2 + KIND_WIDTH + 2)
+
+  const blocks = entries.map(entry => {
+    // `hard` also breaks a single tag longer than the column, which plain wrapping would
+    // otherwise let overflow.
+    const tagLines = entry.tags.length
+      ? wrapAnsi(entry.tags.join(', '), TAGS_WIDTH, { hard: true }).split('\n')
+      : ['']
+
+    const head = [
       fit(entry.name, NAME_WIDTH),
       fit(entry.project, PROJECT_WIDTH),
       fit(entry.kind, KIND_WIDTH),
+      tagLines[0].padEnd(TAGS_WIDTH),
       entry.fileDate.padEnd(DATE_WIDTH),
       formatEdited(entry.editedAt),
-    ].join('  '),
-  )
+    ].join('  ')
 
-  return [header, ...rows].join('\n')
+    return [head, ...tagLines.slice(1).map(line => tagsIndent + line)]
+      .map(line => line.trimEnd())
+      .join('\n')
+  })
+
+  return [header, ...blocks].join('\n\n')
 }
 
 function git(repo: string, args: string[]): string {
@@ -317,7 +409,8 @@ export async function thoughtsLatestCommand(options: LatestOptions): Promise<voi
       process.exit(1)
     }
 
-    console.log(formatTable(entries.slice(0, limit)))
+    // Tags come from file contents, so they are read only for the rows actually shown.
+    console.log(formatTable(attachTags(repo, entries.slice(0, limit))))
   } catch (error) {
     console.error(chalk.red(`Error listing thoughts: ${error}`))
     process.exit(1)

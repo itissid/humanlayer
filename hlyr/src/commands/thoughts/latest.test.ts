@@ -5,6 +5,7 @@ import {
   parseKind,
   shouldInclude,
   parseGitLog,
+  parseTags,
   formatEdited,
   buildEntries,
   formatTable,
@@ -184,6 +185,81 @@ describe('parseKind()', () => {
   })
 })
 
+describe('parseTags()', () => {
+  const doc = (body: string): string => body.replace(/^\n/, '')
+
+  it('extracts inline-flow tags from frontmatter', () => {
+    expect(
+      parseTags(
+        doc(`
+---
+date: 2025-11-17
+tags: [research, codebase, linear, mcp]
+status: complete
+---
+
+# Research
+`),
+      ),
+    ).toEqual(['research', 'codebase', 'linear', 'mcp'])
+  })
+
+  it('ignores a tags: line inside a fenced code block', () => {
+    // Verbatim from repos/therapro-demo/shared/plans/2026-04-04-referral-intake-xstate-…md:154,
+    // which a document-wide grep would misread as metadata.
+    expect(
+      parseTags(
+        doc(`
+---
+date: 2026-04-04
+status: draft
+---
+
+#### 4. Tags type declaration
+
+\`\`\`typescript
+tags: {} as 'bot_conversation' | 'staff_workflow' | 'terminal',
+\`\`\`
+`),
+      ),
+    ).toEqual([])
+  })
+
+  it('returns no tags when the document has no frontmatter at all', () => {
+    expect(parseTags('# Just a heading\n\ntags: [not, metadata]\n')).toEqual([])
+  })
+
+  it('returns no tags when frontmatter carries no tags key', () => {
+    expect(parseTags(doc('\n---\ndate: 2025-11-17\nstatus: complete\n---\n\n# Doc\n'))).toEqual([])
+  })
+
+  it('returns no tags when the frontmatter fence is never closed', () => {
+    expect(
+      parseTags(doc('\n---\ntags: [research, codebase]\n\n# Doc without a closing fence\n')),
+    ).toEqual([])
+  })
+
+  it('handles an empty tag list', () => {
+    expect(parseTags(doc('\n---\ntags: []\n---\n'))).toEqual([])
+  })
+
+  it('strips quotes and surplus whitespace from tags', () => {
+    expect(parseTags(doc(`\n---\ntags: ['research',  "codebase" , mcp]\n---\n`))).toEqual([
+      'research',
+      'codebase',
+      'mcp',
+    ])
+  })
+
+  it('tolerates CRLF line endings', () => {
+    expect(parseTags('---\r\ntags: [research, mcp]\r\n---\r\n')).toEqual(['research', 'mcp'])
+  })
+
+  it('returns no tags for empty input', () => {
+    expect(parseTags('')).toEqual([])
+  })
+})
+
 describe('formatEdited()', () => {
   it('renders the requested Eastern-time format', () => {
     // 19:34 UTC on 2026-08-08 is 15:34 EDT.
@@ -323,6 +399,7 @@ describe('formatTable()', () => {
       name: '2025-11-18-a',
       project: 'humanlayer',
       kind: 'research',
+      tags: ['research', 'codebase', 'mcp'],
       fileDate: '2025-11-18',
       commit: 'aaa',
       editedAt: '2026-08-11T12:30:06+00:00',
@@ -332,34 +409,84 @@ describe('formatTable()', () => {
       name: 'notes',
       project: 'global',
       kind: '',
+      tags: [],
       fileDate: '',
       commit: 'bbb',
       editedAt: '2026-08-10T09:05:00+00:00',
     },
   ]
 
-  it('emits a header and one row per entry', () => {
+  // Entries render as blocks separated by a blank line: header, '', block, '', block…
+  const blockOf = (index: number): string[] => formatTable(entries).split('\n\n')[index + 1].split('\n')
+
+  it('emits every column in the header', () => {
+    const header = formatTable(entries).split('\n')[0]
+    expect(header).toContain('NAME')
+    expect(header).toContain('PROJECT')
+    expect(header).toContain('KIND')
+    expect(header).toContain('TAGS')
+    expect(header).toContain('DATE')
+    expect(header).toContain('EDITED (ET)')
+  })
+
+  it('separates the header and each entry with a blank line', () => {
     const lines = formatTable(entries).split('\n')
-    expect(lines[0]).toContain('NAME')
-    expect(lines[0]).toContain('PROJECT')
-    expect(lines[0]).toContain('KIND')
-    expect(lines[0]).toContain('DATE')
-    expect(lines[0]).toContain('EDITED (ET)')
-    expect(lines).toHaveLength(3)
+    expect(lines[1]).toBe('')
+    expect(lines[3]).toBe('')
+    expect(lines).toHaveLength(5)
   })
 
   it('renders the kind column from the containing folder', () => {
-    expect(formatTable(entries).split('\n')[1]).toContain('research')
+    expect(blockOf(0)[0]).toContain('research')
   })
 
-  it('renders blank date and kind columns for an undated, uncategorized document', () => {
-    const row = formatTable(entries).split('\n')[2]
+  it('renders tags as a comma-separated list', () => {
+    expect(blockOf(0)[0]).toContain('research, codebase, mcp')
+  })
+
+  it('renders blank date, kind and tag columns for an undated, uncategorized document', () => {
+    const row = blockOf(1)[0]
     expect(row).toContain('notes')
     expect(row).toContain('global')
     expect(row).not.toContain('research')
     expect(row).not.toContain('2026-08-10T')
     // 09:05 UTC is 05:05 EDT.
     expect(row).toContain('Aug 10 2026 05:05 AM')
+  })
+
+  it('wraps a long tag list onto continuation lines aligned under the TAGS column', () => {
+    const wide: ThoughtEntry[] = [
+      {
+        ...entries[0],
+        tags: ['research', 'dropbox', 'truenas', 'sshfs', 'nfs', 'gpu', 'rtx3090', 'clip'],
+      },
+    ]
+    const block = formatTable(wide).split('\n\n')[1].split('\n')
+
+    expect(block.length).toBeGreaterThan(1)
+
+    // Every continuation line starts at the TAGS column and stays inside its width.
+    const indent = 52 + 2 + 16 + 2 + 14 + 2
+    for (const line of block.slice(1)) {
+      expect(line.slice(0, indent)).toBe(' '.repeat(indent))
+      expect(line.trimEnd().length - indent).toBeLessThanOrEqual(28)
+    }
+
+    // No tag is lost in the wrapping.
+    expect(block.join(' ')).toContain('rtx3090')
+    expect(block.join(' ')).toContain('clip')
+  })
+
+  it('breaks a single tag longer than the column rather than overflowing', () => {
+    const long = 'a'.repeat(40)
+    const block = formatTable([{ ...entries[0], tags: [long] }])
+      .split('\n\n')[1]
+      .split('\n')
+
+    expect(block.length).toBeGreaterThan(1)
+    for (const line of block) {
+      expect(line.trimEnd().length).toBeLessThanOrEqual(52 + 2 + 16 + 2 + 14 + 2 + 28 + 2 + 10 + 2 + 20)
+    }
   })
 
   it('reports when there is nothing to show', () => {
