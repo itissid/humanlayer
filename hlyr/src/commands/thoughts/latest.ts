@@ -7,10 +7,12 @@ import { loadThoughtsConfig, expandPath } from '../../thoughtsConfig.js'
 export interface ThoughtEntry {
   /** Path relative to the thoughts repo root. Unique per document, so it is the dedup key. */
   relPath: string
-  /** Filename with the date prefix and .md extension stripped. */
+  /** Filename with the .md extension stripped. The date prefix is retained. */
   name: string
   /** Project the document belongs to, or 'global'. */
   project: string
+  /** Containing category folder (research, plans, tickets, …), or '' when uncategorized. */
+  kind: string
   /** Date parsed from the filename prefix, or '' when the filename carries no date. */
   fileDate: string
   /** Full sha of the most recent commit touching relPath. */
@@ -19,31 +21,35 @@ export interface ThoughtEntry {
   editedAt: string
 }
 
-const NAME_WIDTH = 40
+const NAME_WIDTH = 52
 const PROJECT_WIDTH = 16
+const KIND_WIDTH = 14
 const DATE_WIDTH = 10
 const DEFAULT_LIMIT = 20
 
+/** Timestamps are normalized to one zone so rows committed from different machines compare. */
+const DISPLAY_TIMEZONE = 'America/New_York'
+
 /**
- * Splits a leading date off a thoughts filename.
+ * Reads the leading date off a thoughts filename, if it has one.
  *
- * Two shapes are in use: `2025-11-18-slug.md` and `2026-08-11_12-27-07_slug.md`. Anything
- * else (`feature_template.md`, `03-upstream-foo.md`) keeps its whole name and reports no date.
+ * Two shapes are in use: `2025-11-18-slug.md` and `2026-08-11_12-27-07_slug.md`. Anything else
+ * (`feature_template.md`, `03-upstream-foo.md`) reports no date.
  */
-export function parseFilenameDate(basename: string): { fileDate: string; name: string } {
+export function parseFilenameDate(basename: string): string {
   const stem = basename.replace(/\.md$/i, '')
-  const match = stem.match(/^(\d{4})-(\d{2})-(\d{2})(?:_\d{2}-\d{2}-\d{2})?[-_](.+)$/)
+  const match = stem.match(/^(\d{4})-(\d{2})-(\d{2})(?:_\d{2}-\d{2}-\d{2})?[-_]/)
 
   if (!match) {
-    return { fileDate: '', name: stem }
+    return ''
   }
 
-  const [, year, month, day, rest] = match
+  const [, year, month, day] = match
   if (!isRealDate(Number(year), Number(month), Number(day))) {
-    return { fileDate: '', name: stem }
+    return ''
   }
 
-  return { fileDate: `${year}-${month}-${day}`, name: rest }
+  return `${year}-${month}-${day}`
 }
 
 function isRealDate(year: number, month: number, day: number): boolean {
@@ -69,6 +75,30 @@ export function parseProject(relPath: string, reposDir: string, globalDir: strin
   }
 
   return null
+}
+
+/**
+ * Reads the category folder a document is filed under — research, plans, tickets, handoffs, …
+ *
+ * The category sits directly after the `user|shared` segment:
+ *   repos/<project>/<user|shared>/<kind>/…/<file>.md
+ *   global/<user|shared>/<kind>/…/<file>.md
+ *
+ * A handful of documents sit directly under the user or shared segment with no category folder;
+ * the length guard keeps those from reporting their own filename as a kind.
+ */
+export function parseKind(relPath: string, reposDir: string, globalDir: string): string {
+  const segments = relPath.split('/')
+
+  if (segments[0] === reposDir && segments.length > 4) {
+    return segments[3]
+  }
+
+  if (segments[0] === globalDir && segments.length > 3) {
+    return segments[2]
+  }
+
+  return ''
 }
 
 /**
@@ -128,11 +158,31 @@ export function parseGitLog(stdout: string): Map<string, { commit: string; date:
 }
 
 /**
- * Renders an ISO committer date as `YYYY-MM-DD HH:MM` in the committing machine's own
- * timezone, by slicing rather than reparsing — so output does not shift with the reader's TZ.
+ * Renders an ISO committer date as `Aug  8 2026 03:34 PM`, converted to Eastern Time.
+ *
+ * Every row is normalized to one zone: a commit made from a machine in another timezone would
+ * otherwise print its own wall-clock, so times could not be compared down the column. The named
+ * zone (rather than a fixed offset) means EST and EDT rows are both correct.
+ *
+ * Assembled from parts because en-US otherwise injects commas ('Aug 11, 2026, 08:30 AM'). The
+ * day is space-padded to two so the field is a fixed 20 characters.
  */
 export function formatEdited(iso: string): string {
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: DISPLAY_TIMEZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).formatToParts(new Date(iso))
+
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find(part => part.type === type)?.value ?? ''
+
+  const day = get('day').padStart(2, ' ')
+  return `${get('month')} ${day} ${get('year')} ${get('hour')}:${get('minute')} ${get('dayPeriod')}`
 }
 
 /**
@@ -161,8 +211,16 @@ export function buildEntries(
       continue
     }
 
-    const { fileDate, name } = parseFilenameDate(relPath.split('/').pop()!)
-    entries.push({ relPath, name, project, fileDate, commit, editedAt: date })
+    const basename = relPath.split('/').pop()!
+    entries.push({
+      relPath,
+      name: basename.replace(/\.md$/i, ''),
+      project,
+      kind: parseKind(relPath, reposDir, globalDir),
+      fileDate: parseFilenameDate(basename),
+      commit,
+      editedAt: date,
+    })
   }
 
   // Sort on parsed timestamps, not the raw strings: ISO dates carrying different UTC offsets
@@ -188,14 +246,16 @@ export function formatTable(entries: ThoughtEntry[]): string {
   const header = [
     'NAME'.padEnd(NAME_WIDTH),
     'PROJECT'.padEnd(PROJECT_WIDTH),
+    'KIND'.padEnd(KIND_WIDTH),
     'DATE'.padEnd(DATE_WIDTH),
-    'EDITED',
+    'EDITED (ET)',
   ].join('  ')
 
   const rows = entries.map(entry =>
     [
       fit(entry.name, NAME_WIDTH),
       fit(entry.project, PROJECT_WIDTH),
+      fit(entry.kind, KIND_WIDTH),
       entry.fileDate.padEnd(DATE_WIDTH),
       formatEdited(entry.editedAt),
     ].join('  '),

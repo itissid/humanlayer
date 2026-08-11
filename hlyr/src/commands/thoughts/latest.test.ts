@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseFilenameDate,
   parseProject,
+  parseKind,
   shouldInclude,
   parseGitLog,
   formatEdited,
@@ -12,45 +13,29 @@ import {
 
 describe('parseFilenameDate()', () => {
   it('parses the YYYY-MM-DD-slug shape', () => {
-    expect(parseFilenameDate('2025-11-18-thoughts-subdirectory-structure.md')).toEqual({
-      fileDate: '2025-11-18',
-      name: 'thoughts-subdirectory-structure',
-    })
+    expect(parseFilenameDate('2025-11-18-thoughts-subdirectory-structure.md')).toBe('2025-11-18')
   })
 
   it('parses the YYYY-MM-DD_HH-MM-SS_slug shape', () => {
-    expect(parseFilenameDate('2026-08-11_12-27-07_call-lifecycle-slice-1-to-slice-2.md')).toEqual({
-      fileDate: '2026-08-11',
-      name: 'call-lifecycle-slice-1-to-slice-2',
-    })
+    expect(parseFilenameDate('2026-08-11_12-27-07_call-lifecycle-slice-1-to-slice-2.md')).toBe(
+      '2026-08-11',
+    )
   })
 
-  it('returns a blank date when there is no prefix', () => {
-    expect(parseFilenameDate('feature_template.md')).toEqual({
-      fileDate: '',
-      name: 'feature_template',
-    })
+  it('returns blank when there is no prefix', () => {
+    expect(parseFilenameDate('feature_template.md')).toBe('')
   })
 
   it('does not mistake a leading sequence number for a date', () => {
-    expect(parseFilenameDate('03-upstream-smart-turn-path-deprecation.md')).toEqual({
-      fileDate: '',
-      name: '03-upstream-smart-turn-path-deprecation',
-    })
+    expect(parseFilenameDate('03-upstream-smart-turn-path-deprecation.md')).toBe('')
   })
 
-  it('keeps ticket identifiers in the name', () => {
-    expect(parseFilenameDate('2026-02-12-NUM-62-fifo-tts-correlation-desync.md')).toEqual({
-      fileDate: '2026-02-12',
-      name: 'NUM-62-fifo-tts-correlation-desync',
-    })
+  it('parses a date that precedes a ticket identifier', () => {
+    expect(parseFilenameDate('2026-02-12-NUM-62-fifo-tts-correlation-desync.md')).toBe('2026-02-12')
   })
 
-  it('rejects an out-of-range date rather than stripping it', () => {
-    expect(parseFilenameDate('2026-13-45-not-a-real-date.md')).toEqual({
-      fileDate: '',
-      name: '2026-13-45-not-a-real-date',
-    })
+  it('rejects an out-of-range date', () => {
+    expect(parseFilenameDate('2026-13-45-not-a-real-date.md')).toBe('')
   })
 })
 
@@ -158,10 +143,79 @@ describe('parseGitLog()', () => {
   })
 })
 
+describe('parseKind()', () => {
+  it('reads the category folder under a repos/ project', () => {
+    expect(parseKind('repos/humanlayer/shared/research/2025-11-18-a.md', 'repos', 'global')).toBe(
+      'research',
+    )
+    expect(parseKind('repos/humanlayer/shared/plans/2026-07-08-a.md', 'repos', 'global')).toBe('plans')
+  })
+
+  it('reads the category from a personal directory too', () => {
+    expect(parseKind('repos/therapro-demo/chris/notes/2026-06-19-a.md', 'repos', 'global')).toBe(
+      'notes',
+    )
+  })
+
+  it('reports the top-level category for deeply nested documents', () => {
+    expect(
+      parseKind(
+        'repos/therapro-demo/shared/tickets/local/eval-harness-v1/issues/01-a.md',
+        'repos',
+        'global',
+      ),
+    ).toBe('tickets')
+  })
+
+  it('reads the category under global/', () => {
+    expect(parseKind('global/itissid/truenas/truenas_config.md', 'repos', 'global')).toBe('truenas')
+    expect(parseKind('global/shared/research/a.md', 'repos', 'global')).toBe('research')
+  })
+
+  it('returns blank when the document sits directly under the user or shared segment', () => {
+    expect(parseKind('repos/therapro-demo/itissid/cheatsheet.md', 'repos', 'global')).toBe('')
+    expect(
+      parseKind('global/itissid/2025-11-06-humanlayer-quick-reference.md', 'repos', 'global'),
+    ).toBe('')
+  })
+
+  it('returns blank for paths outside repos/ and global/', () => {
+    expect(parseKind('.github/workflows/claude.yml', 'repos', 'global')).toBe('')
+  })
+})
+
 describe('formatEdited()', () => {
-  it('renders the committer-local date and time without timezone shifting', () => {
-    expect(formatEdited('2026-08-11T12:30:06+00:00')).toBe('2026-08-11 12:30')
-    expect(formatEdited('2026-02-26T04:52:54-05:00')).toBe('2026-02-26 04:52')
+  it('renders the requested Eastern-time format', () => {
+    // 19:34 UTC on 2026-08-08 is 15:34 EDT.
+    expect(formatEdited('2026-08-08T19:34:00+00:00')).toBe('Aug  8 2026 03:34 PM')
+  })
+
+  it('converts to ET rather than preserving the committer timezone', () => {
+    // 12:30 UTC is 08:30 EDT, not 12:30.
+    expect(formatEdited('2026-08-11T12:30:06+00:00')).toBe('Aug 11 2026 08:30 AM')
+  })
+
+  it('applies EST in winter and EDT in summer', () => {
+    // 17:00 UTC in February is 12:00 EST (-5); in July it is 13:00 EDT (-4).
+    expect(formatEdited('2026-02-15T17:00:00+00:00')).toBe('Feb 15 2026 12:00 PM')
+    expect(formatEdited('2026-07-15T17:00:00+00:00')).toBe('Jul 15 2026 01:00 PM')
+  })
+
+  it('normalizes a non-UTC committer offset to the same ET instant', () => {
+    // 09:52 EST expressed from a -05:00 machine stays 09:52 ET.
+    expect(formatEdited('2026-02-26T09:52:54-05:00')).toBe('Feb 26 2026 09:52 AM')
+    // The same instant written from Berlin must render identically.
+    expect(formatEdited('2026-02-26T15:52:54+01:00')).toBe('Feb 26 2026 09:52 AM')
+  })
+
+  it('renders midnight and noon unambiguously', () => {
+    expect(formatEdited('2026-07-15T04:00:00+00:00')).toBe('Jul 15 2026 12:00 AM')
+    expect(formatEdited('2026-07-15T16:00:00+00:00')).toBe('Jul 15 2026 12:00 PM')
+  })
+
+  it('is fixed width regardless of single- or double-digit day', () => {
+    expect(formatEdited('2026-08-08T19:34:00+00:00')).toHaveLength(20)
+    expect(formatEdited('2026-08-11T12:30:06+00:00')).toHaveLength(20)
   })
 })
 
@@ -230,7 +284,21 @@ describe('buildEntries() — dedup semantics', () => {
 
     const entries = buildEntries(lastTouched, new Set([older, newer]), reposDir, globalDir)
 
-    expect(entries.map(e => e.name)).toEqual(['newer', 'older'])
+    expect(entries.map(e => e.name)).toEqual(['2026-01-02-newer', '2026-01-01-older'])
+  })
+
+  it('keeps the filename date prefix in the displayed name', () => {
+    const doc = 'repos/a/shared/research/2026-01-02-newer.md'
+    const entries = buildEntries(
+      new Map([[doc, { commit: 'aaa', date: '2026-01-02T00:00:00+00:00' }]]),
+      new Set([doc]),
+      reposDir,
+      globalDir,
+    )
+
+    expect(entries[0].name).toBe('2026-01-02-newer')
+    expect(entries[0].fileDate).toBe('2026-01-02')
+    expect(entries[0].kind).toBe('research')
   })
 
   it('sorts correctly across differing timezone offsets', () => {
@@ -244,7 +312,7 @@ describe('buildEntries() — dedup semantics', () => {
 
     const entries = buildEntries(lastTouched, new Set([utc, berlin]), reposDir, globalDir)
 
-    expect(entries.map(e => e.name)).toEqual(['utc', 'berlin'])
+    expect(entries.map(e => e.name)).toEqual(['2026-01-01-utc', '2026-01-01-berlin'])
   })
 })
 
@@ -252,16 +320,18 @@ describe('formatTable()', () => {
   const entries: ThoughtEntry[] = [
     {
       relPath: 'repos/humanlayer/shared/research/2025-11-18-a.md',
-      name: 'a',
+      name: '2025-11-18-a',
       project: 'humanlayer',
+      kind: 'research',
       fileDate: '2025-11-18',
       commit: 'aaa',
       editedAt: '2026-08-11T12:30:06+00:00',
     },
     {
-      relPath: 'global/itissid/truenas/notes.md',
+      relPath: 'global/itissid/notes.md',
       name: 'notes',
       project: 'global',
+      kind: '',
       fileDate: '',
       commit: 'bbb',
       editedAt: '2026-08-10T09:05:00+00:00',
@@ -272,17 +342,24 @@ describe('formatTable()', () => {
     const lines = formatTable(entries).split('\n')
     expect(lines[0]).toContain('NAME')
     expect(lines[0]).toContain('PROJECT')
+    expect(lines[0]).toContain('KIND')
     expect(lines[0]).toContain('DATE')
-    expect(lines[0]).toContain('EDITED')
+    expect(lines[0]).toContain('EDITED (ET)')
     expect(lines).toHaveLength(3)
   })
 
-  it('renders a blank date column for undated documents', () => {
+  it('renders the kind column from the containing folder', () => {
+    expect(formatTable(entries).split('\n')[1]).toContain('research')
+  })
+
+  it('renders blank date and kind columns for an undated, uncategorized document', () => {
     const row = formatTable(entries).split('\n')[2]
     expect(row).toContain('notes')
     expect(row).toContain('global')
+    expect(row).not.toContain('research')
     expect(row).not.toContain('2026-08-10T')
-    expect(row).toContain('2026-08-10 09:05')
+    // 09:05 UTC is 05:05 EDT.
+    expect(row).toContain('Aug 10 2026 05:05 AM')
   })
 
   it('reports when there is nothing to show', () => {
