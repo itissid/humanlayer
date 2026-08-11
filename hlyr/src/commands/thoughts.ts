@@ -3,6 +3,7 @@ import { thoughtsInitCommand } from './thoughts/init.js'
 import { thoughtsUninitCommand } from './thoughts/uninit.js'
 import { thoughtsSyncCommand } from './thoughts/sync.js'
 import { thoughtsStatusCommand } from './thoughts/status.js'
+import { thoughtsLatestCommand } from './thoughts/latest.js'
 import { thoughtsConfigCommand } from './thoughts/config.js'
 
 export function thoughtsCommand(program: Command): void {
@@ -35,6 +36,13 @@ export function thoughtsCommand(program: Command): void {
     .description('Show status of thoughts repository')
     .option('--config-file <path>', 'Path to config file')
     .action(thoughtsStatusCommand)
+
+  thoughts
+    .command('latest')
+    .description('List recently committed thoughts across all projects')
+    .option('-n, --limit <count>', 'Number of documents to show', '20')
+    .option('--config-file <path>', 'Path to config file')
+    .action(thoughtsLatestCommand)
 
   thoughts
     .command('config')
