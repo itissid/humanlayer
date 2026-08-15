@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	ignore "github.com/sabhiram/go-gitignore"
 )
@@ -154,6 +155,112 @@ func (s *Scanner) Scan(ctx context.Context) ([]FileEntry, error) {
 		}
 	}
 
+	// Force-include walk: scan directories listed in .claude/fuzzy-include
+	// without gitignore filtering
+	if s.options.RespectGitignore && len(s.options.Paths) > 0 {
+		forceIncludes := loadForceIncludes(s.options.Paths[0])
+		for _, entry := range forceIncludes {
+			select {
+			case <-ctx.Done():
+				return results, ctx.Err()
+			default:
+			}
+
+			// Skip hardcoded exclusions
+			if filepath.Base(entry) == ".git" || filepath.Base(entry) == "node_modules" {
+				continue
+			}
+
+			forceDir := filepath.Join(s.options.Paths[0], entry)
+
+			// Resolve symlinks so WalkDir can enter symlinked directories.
+			// Keep the original path for result reporting.
+			resolvedDir, err := filepath.EvalSymlinks(forceDir)
+			if err != nil {
+				continue
+			}
+			info, err := os.Stat(resolvedDir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+
+			rootPath := s.options.Paths[0]
+
+			err = filepath.WalkDir(resolvedDir, func(path string, d fs.DirEntry, err error) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+				if err != nil {
+					return nil
+				}
+
+				// Remap the resolved path back to the original (symlinked) form.
+				relToResolved, err := filepath.Rel(resolvedDir, path)
+				if err != nil {
+					return nil
+				}
+				var originalPath string
+				if relToResolved == "." {
+					originalPath = forceDir
+				} else {
+					originalPath = filepath.Join(forceDir, relToResolved)
+				}
+				absPath, err := filepath.Abs(originalPath)
+				if err != nil {
+					return nil
+				}
+
+				if seen[absPath] {
+					return nil
+				}
+
+				// Hardcoded exclusions still apply
+				base := filepath.Base(absPath)
+				if base == ".git" || base == "node_modules" {
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
+				}
+
+				// Depth limit (relative to original root, not force-include dir)
+				relPath, err := filepath.Rel(rootPath, absPath)
+				if err != nil {
+					return nil
+				}
+				depth := 1
+				for _, c := range relPath {
+					if c == '/' {
+						depth++
+					}
+				}
+				if s.options.MaxDepth > 0 && depth > s.options.MaxDepth {
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
+				}
+
+				if s.options.FilesOnly && d.IsDir() {
+					return nil
+				}
+
+				results = append(results, FileEntry{
+					AbsPath: absPath,
+					IsDir:   d.IsDir(),
+				})
+				seen[absPath] = true
+				return nil
+			})
+
+			if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+				continue
+			}
+		}
+	}
+
 	return results, nil
 }
 
@@ -212,4 +319,30 @@ func loadGitignore(path string) (*ignore.GitIgnore, error) {
 		return nil, err
 	}
 	return ignore.CompileIgnoreFile(path)
+}
+
+// loadForceIncludes reads .claude/fuzzy-include from the given root path.
+// Returns a list of relative directory paths that should be included
+// in scan results even if gitignored. Returns nil if the file
+// doesn't exist or can't be read.
+func loadForceIncludes(rootPath string) []string {
+	data, err := os.ReadFile(filepath.Join(rootPath, ".claude", "fuzzy-include"))
+	if err != nil {
+		return nil
+	}
+	var entries []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Normalize: strip trailing slash and leading ./
+		line = strings.TrimSuffix(line, "/")
+		line = strings.TrimPrefix(line, "./")
+		if line == "" {
+			continue
+		}
+		entries = append(entries, line)
+	}
+	return entries
 }

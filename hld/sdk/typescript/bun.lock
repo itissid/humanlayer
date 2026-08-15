@@ -15,6 +15,9 @@
       },
     },
   },
+  "overrides": {
+    "axios": "1.10.0",
+  },
   "packages": {
     "@isaacs/balanced-match": ["@isaacs/balanced-match@4.0.1", "", {}, "sha512-yzMTt9lEb8Gv7zRioUilSglI0c0smZ9k5D65677DLWLtWJaXIS3CqcGyUFByYKlnUj6TkjLVs54fBl6+TiGQDQ=="],
 

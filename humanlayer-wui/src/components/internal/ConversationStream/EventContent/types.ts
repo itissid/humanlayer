@@ -1,3 +1,6 @@
+// MCP tool names
+export const MCP_ASK_USER_QUESTION = 'mcp__codelayer__ask_user_question'
+
 export enum ToolName {
   Bash = 'Bash',
   BashOutput = 'BashOutput',
@@ -32,6 +35,8 @@ export interface BashToolCallContentProps {
   toolResultContent?: string
   isFocused?: boolean
   isGroupItem?: boolean
+  searchQuery?: string
+  isCurrentSearchMatch?: boolean
 }
 
 // Generic tool call content props interface
@@ -42,6 +47,8 @@ export interface ToolCallContentProps<T> {
   toolResultContent?: string
   isFocused?: boolean
   isGroupItem?: boolean
+  searchQuery?: string
+  isCurrentSearchMatch?: boolean
 }
 
 export function parseToolInput<T>(toolInputJson: string | undefined): T | null {

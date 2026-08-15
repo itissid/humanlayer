@@ -49,9 +49,10 @@ import {
   WebFetchToolCallContent,
   ApprovalWrapper,
   MCPToolCallContent,
+  QuestionContent,
   UnknownToolCallContent,
 } from './EventContent'
-import { BashToolInput, parseToolInput, ToolName } from './EventContent/types'
+import { BashToolInput, MCP_ASK_USER_QUESTION, parseToolInput, ToolName } from './EventContent/types'
 import type {
   ReadToolInput,
   WriteToolInput,
@@ -226,6 +227,8 @@ function ConversationEventRowShell({
   showCopyButton,
   copyContent,
   isGroupItem,
+  isSearchMatch,
+  isCurrentSearchMatch,
 }: {
   children: React.ReactNode
   eventId: number
@@ -244,6 +247,8 @@ function ConversationEventRowShell({
   showCopyButton?: boolean
   copyContent?: string
   isGroupItem?: boolean
+  isSearchMatch?: boolean
+  isCurrentSearchMatch?: boolean
 }) {
   let outerContainerClasses = ['group', 'p-4', 'transition-colors', 'duration-200', 'border-l-2']
 
@@ -261,6 +266,12 @@ function ConversationEventRowShell({
     }
   } else {
     outerContainerClasses.push('border-l-transparent')
+  }
+
+  if (isCurrentSearchMatch) {
+    outerContainerClasses.push('ring-2 ring-accent/60 bg-accent/15')
+  } else if (isSearchMatch) {
+    outerContainerClasses.push('bg-yellow-500/5')
   }
 
   if (!isLast) {
@@ -344,6 +355,12 @@ export interface ConversationEventRowProps extends React.HTMLAttributes<HTMLDivE
   denyingApprovalId?: string | null
   setDenyingApprovalId?: (approvalId: string | null) => void
   onCancelDeny?: () => void
+  sessionId?: string
+  // Conversation search props
+  searchQuery?: string
+  isSearchMatch?: boolean
+  isCurrentSearchMatch?: boolean
+  toolResultMatchCount?: number
 }
 
 function ConversationEventRowInner({
@@ -366,6 +383,11 @@ function ConversationEventRowInner({
   denyingApprovalId,
   setDenyingApprovalId,
   onCancelDeny,
+  sessionId,
+  searchQuery,
+  isSearchMatch,
+  isCurrentSearchMatch,
+  toolResultMatchCount,
 }: ConversationEventRowProps) {
   const isThinking = Boolean(
     event.eventType === ConversationEventType.Thinking ||
@@ -396,6 +418,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -422,6 +446,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -437,6 +463,8 @@ function ConversationEventRowInner({
             isFocused={isFocused}
             fileSnapshot={fileSnapshot}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -451,6 +479,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -465,6 +495,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -479,6 +511,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -535,6 +569,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -549,6 +585,8 @@ function ConversationEventRowInner({
             toolResultContent={toolResult?.toolResultContent}
             isFocused={isFocused}
             isGroupItem={isGroupItem}
+            searchQuery={searchQuery}
+            isCurrentSearchMatch={isCurrentSearchMatch}
           />
         )
       }
@@ -609,6 +647,27 @@ function ConversationEventRowInner({
           />
         )
       }
+    } else if (event.toolName === MCP_ASK_USER_QUESTION) {
+      // Custom rendering for ask_user_question
+      if (sessionId) {
+        messageContent = <QuestionContent event={event} sessionId={sessionId} />
+      } else {
+        // Fallback when session context not available
+        const toolInput = parseToolInput<Record<string, any>>(event.toolInputJson)
+        if (toolInput) {
+          messageContent = (
+            <MCPToolCallContent
+              toolName={event.toolName}
+              toolInput={toolInput}
+              approvalStatus={event.approvalStatus}
+              isCompleted={event.isCompleted}
+              toolResultContent={toolResult?.toolResultContent}
+              isFocused={isFocused}
+              isGroupItem={isGroupItem}
+            />
+          )
+        }
+      }
     } else if (event.toolName?.startsWith('mcp__')) {
       // Handle MCP tools generically
       const toolInput = parseToolInput<Record<string, any>>(event.toolInputJson)
@@ -645,10 +704,21 @@ function ConversationEventRowInner({
       )
     }
   } else if (event.role === ConversationRole.User) {
-    messageContent = <UserMessageContent eventContent={event.content || ''} />
+    messageContent = (
+      <UserMessageContent
+        eventContent={event.content || ''}
+        searchQuery={searchQuery}
+        isCurrentSearchMatch={isCurrentSearchMatch}
+      />
+    )
   } else if (event.role === ConversationRole.Assistant) {
     messageContent = (
-      <AssistantMessageContent eventContent={event.content || ''} isThinking={isThinking} />
+      <AssistantMessageContent
+        eventContent={event.content || ''}
+        isThinking={isThinking}
+        searchQuery={searchQuery}
+        isCurrentSearchMatch={isCurrentSearchMatch}
+      />
     )
   }
 
@@ -696,6 +766,8 @@ function ConversationEventRowInner({
       createdAt={event.createdAt}
       showCopyButton={showCopyButton}
       copyContent={event.content || ''}
+      isSearchMatch={isSearchMatch}
+      isCurrentSearchMatch={isCurrentSearchMatch}
     >
       {needsApproval ? (
         <ApprovalWrapper
@@ -709,11 +781,31 @@ function ConversationEventRowInner({
           onCancelDeny={onCancelDeny}
         >
           {messageContent}
+          {toolResultMatchCount ? (
+            <div className="mt-1">
+              <ToolResultMatchBadge count={toolResultMatchCount} />
+            </div>
+          ) : null}
         </ApprovalWrapper>
       ) : (
-        messageContent
+        <>
+          {messageContent}
+          {toolResultMatchCount ? (
+            <div className="mt-1">
+              <ToolResultMatchBadge count={toolResultMatchCount} />
+            </div>
+          ) : null}
+        </>
       )}
     </ConversationEventRowShell>
+  )
+}
+
+function ToolResultMatchBadge({ count }: { count: number }) {
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 rounded">
+      {count} {count === 1 ? 'match' : 'matches'} in result
+    </span>
   )
 }
 

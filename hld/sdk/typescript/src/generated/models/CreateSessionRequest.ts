@@ -174,7 +174,8 @@ export interface CreateSessionRequest {
 export const CreateSessionRequestModelEnum = {
     Opus: 'opus',
     Sonnet: 'sonnet',
-    Haiku: 'haiku'
+    Haiku: 'haiku',
+    Fable: 'fable'
 } as const;
 export type CreateSessionRequestModelEnum = typeof CreateSessionRequestModelEnum[keyof typeof CreateSessionRequestModelEnum];
 

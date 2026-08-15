@@ -109,6 +109,8 @@ func (h *SessionHandlers) HandleLaunchSession(ctx context.Context, params json.R
 			config.Model = claudecode.ModelSonnet
 		case "haiku":
 			config.Model = claudecode.ModelHaiku
+		case "fable":
+			config.Model = claudecode.ModelFable
 		default:
 			// Let Claude decide the default
 		}

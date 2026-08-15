@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
+
+exec codex \
+  --profile humanlayer-local \
+  --sandbox workspace-write \
+  --ask-for-approval never \
+  --search \
+  "$@"

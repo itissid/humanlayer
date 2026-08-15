@@ -87,6 +87,12 @@ interface StoreState {
   addRecentResolvedApprovalToCache: (approvalId: string) => void
   isRecentResolvedApproval: (approvalId: string) => boolean
 
+  /* Waiting reason tracking for session table */
+  sessionsAwaitingAnswer: Set<string>
+  addSessionAwaitingAnswer: (sessionId: string) => void
+  removeSessionAwaitingAnswer: (sessionId: string) => void
+  setSessionsAwaitingAnswer: (sessionIds: Set<string>) => void
+
   /* Navigation tracking */
   recentNavigations: Map<string, number> // sessionId -> timestamp
   trackNavigationFrom: (sessionId: string) => void
@@ -144,6 +150,19 @@ interface StoreState {
   setResponseEditor: (responseEditor: Editor) => void
   setResponseEditorEmpty: (isEmpty: boolean) => void
   removeResponseEditor: () => void
+
+  /* Conversation Search */
+  conversationSearch: {
+    isOpen: boolean
+    query: string
+    currentMatchIndex: number // 0-based, -1 when no matches
+    matchCount: number
+  }
+  openConversationSearch: () => void
+  closeConversationSearch: () => void
+  setConversationSearchQuery: (query: string) => void
+  cycleConversationSearchMatch: (direction: 'next' | 'prev') => void
+  setConversationSearchMatchCount: (count: number) => void
 }
 
 export const useStore = create<StoreState>((set, get) => {
@@ -937,6 +956,20 @@ export const useStore = create<StoreState>((set, get) => {
       return get().recentResolvedApprovalsCache.has(approvalId)
     },
 
+    // Waiting reason tracking for session table
+    sessionsAwaitingAnswer: new Set<string>(),
+    addSessionAwaitingAnswer: (sessionId: string) =>
+      set(state => ({
+        sessionsAwaitingAnswer: new Set(state.sessionsAwaitingAnswer).add(sessionId),
+      })),
+    removeSessionAwaitingAnswer: (sessionId: string) =>
+      set(state => {
+        const newSet = new Set(state.sessionsAwaitingAnswer)
+        newSet.delete(sessionId)
+        return { sessionsAwaitingAnswer: newSet }
+      }),
+    setSessionsAwaitingAnswer: (sessionIds: Set<string>) => set({ sessionsAwaitingAnswer: sessionIds }),
+
     // Navigation tracking
     recentNavigations: new Map(),
     trackNavigationFrom: (sessionId: string) =>
@@ -1147,6 +1180,70 @@ export const useStore = create<StoreState>((set, get) => {
       logger.log('AppStore.removeResponseEditor() - removing response editor')
       return set({ responseEditor: null, isResponseEditorEmpty: true })
     },
+
+    /* Conversation Search */
+    conversationSearch: {
+      isOpen: false,
+      query: '',
+      currentMatchIndex: -1,
+      matchCount: 0,
+    },
+    openConversationSearch: () =>
+      set(state => ({
+        conversationSearch: { ...state.conversationSearch, isOpen: true },
+      })),
+    closeConversationSearch: () =>
+      set({
+        conversationSearch: {
+          isOpen: false,
+          query: '',
+          currentMatchIndex: -1,
+          matchCount: 0,
+        },
+      }),
+    setConversationSearchQuery: (query: string) =>
+      set(state => ({
+        conversationSearch: {
+          ...state.conversationSearch,
+          query,
+          // Reset to first match whenever query changes
+          currentMatchIndex: query ? 0 : -1,
+        },
+      })),
+    cycleConversationSearchMatch: (direction: 'next' | 'prev') =>
+      set(state => {
+        const { matchCount, currentMatchIndex } = state.conversationSearch
+        if (matchCount <= 0) {
+          return {
+            conversationSearch: { ...state.conversationSearch, currentMatchIndex: -1 },
+          }
+        }
+        const base = currentMatchIndex < 0 ? 0 : currentMatchIndex
+        const nextIndex =
+          direction === 'next'
+            ? (base + 1) % matchCount
+            : (base - 1 + matchCount) % matchCount
+        return {
+          conversationSearch: { ...state.conversationSearch, currentMatchIndex: nextIndex },
+        }
+      }),
+    setConversationSearchMatchCount: (count: number) =>
+      set(state => {
+        const { currentMatchIndex } = state.conversationSearch
+        let newIndex = currentMatchIndex
+        if (count <= 0) {
+          newIndex = -1
+        } else if (currentMatchIndex < 0 || currentMatchIndex >= count) {
+          newIndex = 0
+        }
+        return {
+          conversationSearch: {
+            ...state.conversationSearch,
+            matchCount: count,
+            currentMatchIndex: newIndex,
+          },
+        }
+      }),
   }
 })
 

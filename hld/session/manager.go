@@ -29,13 +29,20 @@ type Manager struct {
 	eventBus           bus.EventBus
 	store              store.ConversationStore
 	approvalReconciler ApprovalReconciler
-	pendingQueries     sync.Map // map[sessionID]query - stores queries waiting for Claude session ID
-	socketPath         string   // Daemon socket path for MCP servers
-	httpPort           int      // HTTP server port for proxy endpoint
+	pendingQueries     sync.Map          // map[sessionID]query - stores queries waiting for Claude session ID
+	socketPath         string            // Daemon socket path for MCP servers
+	httpPort           int               // HTTP server port for proxy endpoint
+	config             *hldconfig.Config // Full daemon config for default MCP servers
 }
 
 // Compile-time check that Manager implements SessionManager
 var _ SessionManager = (*Manager)(nil)
+
+// disableBuiltInAskUserQuestion appends "AskUserQuestion" to the DisallowedTools
+// slice so the built-in tool is replaced by our MCP-based implementation.
+func disableBuiltInAskUserQuestion(config *claudecode.SessionConfig) {
+	config.DisallowedTools = append(config.DisallowedTools, "AskUserQuestion")
+}
 
 // NewManager creates a new session manager with required store
 func NewManager(eventBus bus.EventBus, store store.ConversationStore, socketPath string) (*Manager, error) {
@@ -76,6 +83,16 @@ func NewManagerWithConfig(eventBus bus.EventBus, store store.ConversationStore, 
 		store:           store,
 		socketPath:      socketPath,
 		claudePath:      cfg.ClaudePath, // Use configured Claude path
+		config:          cfg,            // Store full config for default MCP servers
+	}
+
+	// Log default MCP servers if configured
+	if len(cfg.DefaultMCPServers) > 0 {
+		serverNames := make([]string, 0, len(cfg.DefaultMCPServers))
+		for name := range cfg.DefaultMCPServers {
+			serverNames = append(serverNames, name)
+		}
+		logger.Info("loaded default MCP servers from config", "servers", serverNames)
 	}
 
 	// Try to initialize Claude client but don't fail if unavailable
@@ -211,6 +228,28 @@ func (m *Manager) LaunchSession(ctx context.Context, config LaunchSessionConfig,
 	slog.Debug("injected codelayer MCP server",
 		"session_id", sessionID,
 		"socket_path", m.socketPath)
+
+	// Inject default MCP servers from daemon config (after codelayer, before user-provided)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer or user-provided servers
+			if _, exists := claudeConfig.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				claudeConfig.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID)
+			}
+		}
+	}
 
 	// Add HUMANLAYER_RUN_ID and HUMANLAYER_DAEMON_SOCKET to MCP server environment
 	// For HTTP servers, inject session ID header
@@ -449,6 +488,9 @@ func (m *Manager) LaunchSession(ctx context.Context, config LaunchSessionConfig,
 		"permission_prompt_tool", claudeConfig.PermissionPromptTool,
 		"mcp_servers", mcpServerCount,
 		"mcp_servers_detail", mcpServersDetail)
+
+	// Disable built-in AskUserQuestion - we replace it with our MCP tool
+	disableBuiltInAskUserQuestion(&claudeConfig)
 
 	// Launch Claude session (without daemon-level settings)
 	claudeSession, err := client.Launch(claudeConfig)
@@ -1071,6 +1113,8 @@ func (m *Manager) processStreamEvent(ctx context.Context, sessionID string, clau
 					modelName = "sonnet"
 				} else if strings.Contains(lowerModel, "haiku") {
 					modelName = "haiku"
+				} else if strings.Contains(lowerModel, "fable") {
+					modelName = "fable"
 				}
 
 				// Update session with both model ID and simplified name
@@ -1695,6 +1739,29 @@ func (m *Manager) ContinueSession(ctx context.Context, req ContinueSessionConfig
 		"parent_session_id", req.ParentSessionID,
 		"socket_path", m.socketPath)
 
+	// Inject default MCP servers from daemon config (if not already present from parent or user override)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer, inherited servers, or user-provided servers
+			if _, exists := config.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				config.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config for continued session",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID,
+					"parent_session_id", req.ParentSessionID)
+			}
+		}
+	}
+
 	if config.MCPConfig != nil {
 		for name, server := range config.MCPConfig.MCPServers {
 			// Skip codelayer as we already configured it above
@@ -1782,6 +1849,9 @@ func (m *Manager) ContinueSession(ctx context.Context, req ContinueSessionConfig
 		"proxy_enabled", dbSession.ProxyEnabled,
 		"proxy_base_url", dbSession.ProxyBaseURL,
 		"proxy_model", dbSession.ProxyModelOverride)
+
+	// Disable built-in AskUserQuestion - we replace it with our MCP tool
+	disableBuiltInAskUserQuestion(&config)
 
 	claudeSession, err := client.Launch(config)
 	if err != nil {
@@ -1946,6 +2016,28 @@ func (m *Manager) launchDraftWithConfig(ctx context.Context, sessionID, runID st
 			"HUMANLAYER_SESSION_ID":    sessionID,
 			"HUMANLAYER_DAEMON_SOCKET": m.socketPath,
 		},
+	}
+
+	// Inject default MCP servers from daemon config (after codelayer, before user-provided)
+	if m.config != nil && len(m.config.DefaultMCPServers) > 0 {
+		for name, serverCfg := range m.config.DefaultMCPServers {
+			// Don't overwrite codelayer or user-provided servers
+			if _, exists := claudeConfig.MCPConfig.MCPServers[name]; !exists {
+				server := claudecode.MCPServer{
+					Command: serverCfg.Command,
+					Args:    serverCfg.Args,
+					Env:     serverCfg.Env,
+					Type:    serverCfg.Type,
+					URL:     serverCfg.URL,
+					Headers: serverCfg.Headers,
+				}
+				claudeConfig.MCPConfig.MCPServers[name] = server
+				slog.Debug("injected default MCP server from config for draft session",
+					"name", name,
+					"type", serverCfg.Type,
+					"session_id", sessionID)
+			}
+		}
 	}
 
 	// Add HUMANLAYER_RUN_ID and HUMANLAYER_DAEMON_SOCKET to MCP server environment
@@ -2194,6 +2286,8 @@ func (m *Manager) LaunchDraftSession(ctx context.Context, sessionID string, prom
 			claudeConfig.DisallowedTools = disallowedTools
 		}
 	}
+	// Disable built-in AskUserQuestion - we replace it with our MCP tool
+	disableBuiltInAskUserQuestion(&claudeConfig)
 	if sess.AdditionalDirectories != "" {
 		var additionalDirs []string
 		if err := json.Unmarshal([]byte(sess.AdditionalDirectories), &additionalDirs); err == nil {

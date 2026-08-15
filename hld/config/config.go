@@ -19,6 +19,20 @@ var (
 	DefaultClaudePath   = ""     // Empty means auto-detect
 )
 
+// MCPServerConfig represents a single MCP server configuration for the config file.
+// It mirrors claudecode.MCPServer but uses mapstructure tags for config parsing.
+type MCPServerConfig struct {
+	// For stdio-based servers
+	Command string            `mapstructure:"command,omitempty" json:"command,omitempty"`
+	Args    []string          `mapstructure:"args,omitempty" json:"args,omitempty"`
+	Env     map[string]string `mapstructure:"env,omitempty" json:"env,omitempty"`
+
+	// For HTTP servers
+	Type    string            `mapstructure:"type,omitempty" json:"type,omitempty"`       // "http" for HTTP servers
+	URL     string            `mapstructure:"url,omitempty" json:"url,omitempty"`         // The HTTP endpoint URL
+	Headers map[string]string `mapstructure:"headers,omitempty" json:"headers,omitempty"` // HTTP headers to include
+}
+
 // Config represents the daemon configuration
 type Config struct {
 	// Socket configuration
@@ -43,6 +57,10 @@ type Config struct {
 
 	// Claude configuration
 	ClaudePath string `mapstructure:"claude_path"`
+
+	// Default MCP servers to inject into all new sessions
+	// These are merged with the codelayer MCP server and any user-provided servers
+	DefaultMCPServers map[string]MCPServerConfig `mapstructure:"default_mcp_servers"`
 }
 
 // Load loads configuration with priority: flags > env vars > config file > defaults

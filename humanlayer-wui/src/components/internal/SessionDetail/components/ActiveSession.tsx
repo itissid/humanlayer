@@ -15,6 +15,7 @@ import { showUndoToast } from '@/utils/undoToast'
 import { TOAST_IDS } from '@/constants/toastIds'
 
 // Import extracted components
+import { MCP_ASK_USER_QUESTION } from '../../ConversationStream/EventContent/types'
 import { ConversationStream } from '../../ConversationStream/ConversationStream'
 import { ToolResultModal } from './ToolResultModal'
 import { TodoWidget } from './TodoWidget'
@@ -65,6 +66,11 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
   const responseEditor = useStore(state => state.responseEditor)
   const isEditingSessionTitle = useStore(state => state.isEditingSessionTitle)
   const setIsEditingSessionTitle = useStore(state => state.setIsEditingSessionTitle)
+
+  const conversationSearchOpen = useStore(state => state.conversationSearch.isOpen)
+  const openConversationSearch = useStore(state => state.openConversationSearch)
+  const closeConversationSearch = useStore(state => state.closeConversationSearch)
+  const cycleConversationSearchMatch = useStore(state => state.cycleConversationSearchMatch)
 
   // Keyboard navigation protection
   const { shouldIgnoreMouseEvent, startKeyboardNavigation } = useKeyboardNavigationProtection()
@@ -308,6 +314,18 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
   const [hasPendingApprovalsOutOfView, setHasPendingApprovalsOutOfView] = useState(false)
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0)
 
+  // Determine why the session is waiting for input
+  const waitingReason = useMemo(() => {
+    if (session.status !== SessionStatus.WaitingInput) return undefined
+    const hasPendingApprovals = events.some(e => e.approvalStatus === ApprovalStatus.Pending)
+    if (hasPendingApprovals) return 'approval' as const
+    const hasPendingQuestions = events.some(
+      e => e.eventType === 'tool_call' && e.toolName === MCP_ASK_USER_QUESTION && !e.isCompleted,
+    )
+    if (hasPendingQuestions) return 'question' as const
+    return 'approval' as const
+  }, [session.status, events])
+
   const lastTodo = events
     ?.toReversed()
     .find(e => e.eventType === 'tool_call' && e.toolName === 'TodoWrite')
@@ -332,6 +350,16 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
 
       if (isEditingSessionTitle) {
         return
+      }
+
+      // If conversation search is open and its input is not focused, close the search bar.
+      // (When the input is focused, the input's own onKeyDown handles Escape to blur.)
+      if (conversationSearchOpen) {
+        const activeEl = document.activeElement as HTMLElement | null
+        if (activeEl?.tagName !== 'INPUT') {
+          closeConversationSearch()
+          return
+        }
       }
 
       // Check for denying state early - whether editor is focused or not
@@ -388,6 +416,8 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
       navigation.setFocusedEventId,
       onClose,
       responseEditor,
+      conversationSearchOpen,
+      closeConversationSearch,
     ],
   )
 
@@ -751,6 +781,56 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
     [session.workingDir],
   )
 
+  // Open conversation search
+  useHotkeys(
+    '/',
+    e => {
+      e.preventDefault()
+      openConversationSearch()
+    },
+    {
+      scopes: [detailScope],
+      enabled: !expandedToolResult && !forkViewOpen,
+      preventDefault: true,
+      useKey: true,
+    },
+    [openConversationSearch, expandedToolResult, forkViewOpen],
+  )
+
+  // Cycle conversation search matches with n / N (only when input is blurred)
+  useHotkeys(
+    'n',
+    () => {
+      cycleConversationSearchMatch('next')
+    },
+    {
+      scopes: [detailScope],
+      enabled: conversationSearchOpen && !expandedToolResult,
+    },
+    [conversationSearchOpen, expandedToolResult, cycleConversationSearchMatch],
+  )
+
+  useHotkeys(
+    'shift+n',
+    () => {
+      cycleConversationSearchMatch('prev')
+    },
+    {
+      scopes: [detailScope],
+      enabled: conversationSearchOpen && !expandedToolResult,
+    },
+    [conversationSearchOpen, expandedToolResult, cycleConversationSearchMatch],
+  )
+
+  // Close conversation search when navigating away or switching sessions
+  useEffect(() => {
+    return () => {
+      if (useStore.getState().conversationSearch.isOpen) {
+        closeConversationSearch()
+      }
+    }
+  }, [session.id, closeConversationSearch])
+
   // Rename session hotkey
   useHotkeys(
     'shift+r',
@@ -975,6 +1055,7 @@ export function ActiveSession({ session, onClose }: ActiveSessionProps) {
           autoAcceptEnabled={autoAcceptEdits}
           isArchived={session.archived || false}
           onToggleArchive={handleToggleArchive}
+          waitingReason={waitingReason}
         />
 
         {/* Session mode indicator */}
